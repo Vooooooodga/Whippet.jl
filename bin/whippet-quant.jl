@@ -2,6 +2,7 @@
 # Tim Sterne-Weiler 2015
 
 using Pkg
+using Threads
 
 const dir = abspath( splitdir(@__FILE__)[1] )
 const ver = readline(open(dir * "/VERSION"))
@@ -137,17 +138,24 @@ function main()
    #TODO: first implementation was too slow, ie too much communication overhead
    # try speeding up by using Distributed.nprocs > 1
    println(stderr, "Processing reads from file...")
+    # 使用多线程处理
     if ispaired
        println(stderr, "FASTQ_1: " * args["filename.fastq[.gz]"])
        println(stderr, "FASTQ_2: " * args["paired_mate.fastq[.gz]"])
-       @timer mapped,totreads,readlen = process_paired_reads!( parser, mate_parser, param, lib, quant, multi, mod,
-                                                           sam=args["sam"], qualoffset=enc_offset )
+    
+       Threads.@threads for i in 1:Threads.nthreads()
+          @timer mapped,totreads,readlen = process_paired_reads!( parser, mate_parser, param, lib, quant, multi, mod,
+                                                              sam=args["sam"], qualoffset=enc_offset )
+       end
        readlen = Int(floor(readlen))
        println(stderr, "Finished mapping $mapped paired-end reads of length $readlen each out of a total of $totreads mate-pairs...")
     else
        println(stderr, "FASTQ: " * args["filename.fastq[.gz]"])
-       @timer mapped,totreads,readlen = process_reads!( parser, param, lib, quant, multi, mod,
+
+       Threads.@threads for i in 1:Threads.nthreads()
+          @timer mapped,totreads,readlen = process_reads!( parser, param, lib, quant, multi, mod,
                                                      sam=args["sam"], qualoffset=enc_offset )
+       end
        readlen = Int(floor(readlen))
        println(stderr, "Finished mapping $mapped single-end reads of length $readlen out of a total of $totreads reads...")
     end
@@ -161,7 +169,11 @@ function main()
    build_equivalence_classes!( quant, lib, assign_long=true )
    println(stderr, "- $( length(quant.classes) ) multi-isoform equivalence classes...")
    calculate_tpm!( quant, readlen=readlen )
-   @timer iter = gene_em!( quant, multi, sig=1, readlen=readlen, maxit=10000 )
+  
+   Threads.@threads for i in 1:Threads.nthreads()
+      @timer iter = gene_em!( quant, multi, sig=1, readlen=readlen, maxit=10000 )
+   end
+  
    println(stderr, "Finished calculating transcripts per million (TpM) after $iter iterations of EM...")
    set_gene_tpm!( quant, lib )
    gc_normalize!( mod, lib, quant )
@@ -174,7 +186,9 @@ function main()
 
    println(stderr, "Assigning multi-mapping reads based on maximum likelihood estimate..")
    # Now assign multi to edges.
-   @timer assign_ambig!( quant, lib, multi )
+   Threads.@threads for i in 1:Threads.nthreads()
+      @timer assign_ambig!( quant, lib, multi )
+   end
 
    effective_lengths!( lib, quant, 1, 0)
    println(stderr, "Calculating maximum likelihood estimate of events..." )
